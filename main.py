@@ -12,9 +12,17 @@ from collections import Counter
 from string import punctuation
 import threading
 import time
+import os
+from os.path import expanduser
+from quiz_Spider import quizSpider
+from scrapy.crawler import CrawlerProcess
+import logging
+from nltk.corpus import stopwords
+stopWords = set(stopwords.words('english'))
+from nltk.stem.lancaster import LancasterStemmer
+st = LancasterStemmer()
 
-final_total = []
-threads = []
+
 
 class myThread (threading.Thread):
 	def __init__(self, link):
@@ -47,7 +55,7 @@ class Dimensions:
 			}
 
 	def hq(self):
-		with open('hq_dimensions,txt','r') as f:
+		with open('hq_dimensions.txt','r') as f:
 			questionDimensions=[int(x.strip()) for x in f.readline().split(',')]
 			option1Dimensions=[int(x.strip()) for x in f.readline().split(',')]
 			option2Dimensions=[int(x.strip()) for x in f.readline().split(',')]
@@ -61,13 +69,17 @@ class Dimensions:
 
 
 class Game:
-	def getScreenshotImage(self):
+	def getScreenshotImage(self,folderPath):
 		response=requests.get('http://127.0.0.1:35554/device/2945105d0204/screenshot-test.jpg')
 		img = Image.open(BytesIO(response.content))
+		filename = folderPath+'/screenshot-'+str(sys.argv[1])+'.jpg'
+		img.save(filename)
 		return img
 
-	def cropImage(self,im,dimensions):
+	def cropImage(self,im,dimensions,folderPath):
 		img=im.crop((dimensions[0],dimensions[1],dimensions[2],dimensions[3]))
+		filename = folderPath+'/crop-'+str(sys.argv[1])+str(dimensions[1])+'.jpg'
+		img.save(filename)
 		return img
 
 	def ocr(self,im):
@@ -84,25 +96,16 @@ class Game:
 				b=TextBlob(op)
 				cleanOptions.append(b.correct())
 
-	def getGoogleLinks(self,question):
+	def runSpider(self,question,options,startTime):
+		logging.getLogger().setLevel(logging.INFO)
+		process = CrawlerProcess({
+		    'USER_AGENT': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2272.76 Safari/537.36',
+		    'LOG_LEVEL' : 'INFO'
+		})
 		q=str(question.replace(' ','+'))
 		URL='https://google.co.in/search?q='+q
-		headers = {
-    		'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36'
-    	}
-		response = requests.get(URL,headers=headers)
-		tree = html.fromstring(response.content)
-		return tree.xpath('//*[contains(concat( " ", @class, " " ), concat( " ", "r", " " ))]//a/@href')
-
-	def getBingLinks(self,question):
-		q=str(question.replace(' ','+'))
-		URL='https://bing.com/search?q='+q
-		headers = {
-    		'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/59.0.3071.115 Safari/537.36'
-    	}
-		response = requests.get(URL,headers=headers)
-		tree = html.fromstring(response.content)
-		return tree.xpath('//h2//a/@href')
+		process.crawl(quizSpider,start_urls = [URL],options=options,time=startTime)
+		process.start()
 
 	def getAnswer(self, dictionary, op1, op2, op3):
 		option1 = self.getSubWords(op1)
@@ -134,7 +137,8 @@ class Game:
 		ans = []
 		for k in op.split(' '):
 			for s in k.split('-'):
-				if s!='in' and s!='the' and s!='a':
+				if s not in stopWords:
+					ans.append(st.stem(s))
 					ans.append(s)
 		return ans
 		
@@ -143,42 +147,46 @@ gamesDimension = {
 	'hq':Dimensions().hq
 }
 
+# def getScreenshot():
+# 	im = Image.open('screenshot-loco.jpg')
+# 	return im
+
+
 if __name__=="__main__":
-	im = Game().getScreenshotImage()
+	startTime=time.time()
+	folderPath = expanduser('~/Documents/hacking/quiz_apps/app/images/')+str(argv[1])+'/'+str(time.time())
+	if not os.path.isdir(folderPath):
+		os.makedirs(folderPath)
+	im = Game().getScreenshotImage(folderPath)
+	# im = getScreenshot()
 	game = sys.argv[1]
 	questionDimension = gamesDimension[game]()['question']
 	option1Dimension = gamesDimension[game]()['option1']
 	option2Dimension = gamesDimension[game]()['option2']
 	option3Dimension = gamesDimension[game]()['option3']
 	
-	questionImage = Game().cropImage(im,questionDimension)
-	option1Image = Game().cropImage(im,option1Dimension)
-	option2Image = Game().cropImage(im,option2Dimension)
-	option3Image = Game().cropImage(im,option3Dimension)
+	
+	questionImage = Game().cropImage(im,questionDimension,folderPath)
+	option1Image = Game().cropImage(im,option1Dimension,folderPath)
+	option2Image = Game().cropImage(im,option2Dimension,folderPath)
+	option3Image = Game().cropImage(im,option3Dimension,folderPath)
 
 	questionText = Game().ocr(questionImage).lower()
 	option1Text = Game().ocr(option1Image).lower()
 	option2Text = Game().ocr(option2Image).lower()
 	option3Text = Game().ocr(option3Image).lower()
 
-	questionText = "which kind of shoe gets its name from a weapon"
-	option1Text = 'boots'
-	option2Text = 'stilettos'
-	option3Text = 'espandrilles'
+	# questionText = "which kind of shoe gets its name from a weapon"
+	# option1Text = 'boots'
+	# option2Text = 'stilettos'
+	# option3Text = 'espandrilles'
+	print questionText
 	
-	# getGoogleLinks = Game().getGoogleLinks(questionText)
-	getBingLinks = Game().getBingLinks(questionText)
-	# print getBingLinks
-	ans = {'a':0, 'b':0, 'c':0,'None':0}
-	for link in getBingLinks[:9]:
-		threads.append(myThread(link))
-	for t in threads:
-		t.start()
-	for t in threads:
-		t.join()
-	for d in final_total:
-		ans[Game().getAnswer(d,option1Text,option2Text,option3Text)]+=1
-	print ans
-
-
-	
+	options=[]
+	opt1 = Game().getSubWords(option1Text)
+	opt2 = Game().getSubWords(option2Text)
+	opt3 = Game().getSubWords(option3Text)
+	options.append(opt1)
+	options.append(opt2)
+	options.append(opt3)
+	Game().runSpider(questionText,options,startTime)
